@@ -1,0 +1,45 @@
+// legacy-auth-signin.kql
+// MITRE ATT&CK: T1078.004 — Cloud Accounts (via legacy auth bypass)
+//
+// Legacy authentication protocols (Exchange ActiveSync, SMTP AUTH, POP3,
+// IMAP4, Basic auth over browser) do not support MFA, so a valid credential
+// is all an attacker needs. Conditional Access can't enforce MFA on these
+// flows — blocking them entirely is the fix, but detection is the first step.
+//
+// ClientAppUsed values sourced from Microsoft's documented enum list.
+
+let LookbackWindow = 24h;
+let LegacyClients  = dynamic([
+    "Exchange ActiveSync",
+    "SMTP",
+    "POP3",
+    "IMAP4",
+    "Authenticated SMTP",
+    "AutoDiscover",
+    "Exchange Online PowerShell",
+    "Exchange Web Services",
+    "Offline Address Book",
+    "Other clients",
+    "Reporting Web Services"
+]);
+
+SigninLogs
+| where TimeGenerated > ago(LookbackWindow)
+| where ResultType == "0"                               // successful sign-in only
+| where ClientAppUsed in (LegacyClients)
+| summarize
+    SignInCount      = count(),
+    DistinctIPs      = dcount(IPAddress),
+    UniqueLocations  = make_set(Location, 5),
+    LastSeen         = max(TimeGenerated),
+    FirstSeen        = min(TimeGenerated)
+    by UserPrincipalName, ClientAppUsed, AppDisplayName
+| extend
+    Tactic    = "Initial Access",
+    Technique = "T1078.004 — Cloud Accounts (legacy auth)",
+    Severity  = "Medium",
+    Recommendation = "Block this protocol via Conditional Access or Exchange transport rules"
+| project-reorder LastSeen, UserPrincipalName, ClientAppUsed,
+                  AppDisplayName, SignInCount, DistinctIPs,
+                  UniqueLocations, Tactic, Technique, Severity, Recommendation
+| order by SignInCount desc
