@@ -1,0 +1,41 @@
+// bruteforce-then-success.kql
+// MITRE ATT&CK: T1110 (Brute Force) → T1078 (Valid Accounts)
+//
+// Logic: Find source IPs that generated ≥ N authentication failures within
+// a 6-hour window AND then succeeded at least once from the same IP.
+// The join on IPAddress is the key — it links the "noise" phase to the
+// "access granted" event that the noise was building toward.
+//
+// Tune: FailureThreshold — lower = more sensitive, higher = fewer FPs.
+
+let LookbackWindow   = 6h;
+let FailureThreshold = 10;
+
+let Failures = SigninLogs
+    | where TimeGenerated > ago(LookbackWindow)
+    | where ResultType != "0"                          // any non-success
+    | summarize
+        FailureCount = count(),
+        DistinctUsers = dcount(UserPrincipalName)
+        by IPAddress
+    | where FailureCount >= FailureThreshold;
+
+let Successes = SigninLogs
+    | where TimeGenerated > ago(LookbackWindow)
+    | where ResultType == "0"                          // success
+    | summarize
+        SuccessCount = count(),
+        SuccessUsers = make_set(UserPrincipalName, 5),
+        FirstSuccess = min(TimeGenerated)
+        by IPAddress;
+
+Failures
+| join kind=inner Successes on IPAddress
+| extend
+    Tactic    = "Credential Access → Initial Access",
+    Technique = "T1110 Brute Force → T1078 Valid Accounts",
+    Severity  = "Critical"
+| project-reorder
+    FirstSuccess, IPAddress, FailureCount, DistinctUsers,
+    SuccessCount, SuccessUsers, Tactic, Technique, Severity
+| order by FailureCount desc
