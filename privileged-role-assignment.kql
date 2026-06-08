@@ -1,0 +1,43 @@
+// privileged-role-assignment.kql
+// MITRE ATT&CK: T1098.003 — Account Manipulation: Additional Cloud Roles
+//
+// Fires when a high-privilege Entra ID directory role is assigned to any
+// principal. Legitimate role assignments happen infrequently and should always
+// be reviewed. An attacker with write access to role assignments uses this
+// technique to establish persistence.
+//
+// Covered roles: Global Administrator, Privileged Role Administrator,
+//   Security Administrator, User Account Administrator,
+//   Exchange Administrator, Application Administrator.
+
+let LookbackWindow    = 24h;
+let HighPrivRoles     = dynamic([
+    "Global Administrator",
+    "Privileged Role Administrator",
+    "Security Administrator",
+    "User Account Administrator",
+    "Exchange Administrator",
+    "Application Administrator"
+]);
+
+AuditLogs
+| where TimeGenerated > ago(LookbackWindow)
+| where OperationName in ("Add member to role", "Add eligible member to role")
+| mv-expand TargetResources
+| extend
+    TargetUPN      = tostring(TargetResources.userPrincipalName),
+    TargetType     = tostring(TargetResources.type),
+    RoleName       = tostring(parse_json(tostring(TargetResources.modifiedProperties))
+                        [0].newValue)                // role name is in modifiedProperties
+| where RoleName has_any (HighPrivRoles)
+| extend
+    InitiatedBy    = tostring(InitiatedBy.user.userPrincipalName),
+    InitiatedByIP  = tostring(InitiatedBy.user.ipAddress),
+    Tactic         = "Persistence",
+    Technique      = "T1098.003 — Additional Cloud Roles",
+    Severity       = "High"
+| project
+    TimeGenerated, TargetUPN, RoleName, TargetType,
+    InitiatedBy, InitiatedByIP,
+    Tactic, Technique, Severity
+| order by TimeGenerated desc
